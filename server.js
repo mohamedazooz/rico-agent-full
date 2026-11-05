@@ -107,18 +107,26 @@ if (config.telegramToken) {
         telegramBot.sendMessage(chatId, welcome, { parse_mode: 'Markdown' });
     });
     
-    telegramBot.onText(/\/model/, (msg) => {
+    telegramBot.onText(/\/model/, async (msg) => {
         const chatId = msg.chat.id;
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '🤖 RICO', callback_data: 'model_mohamedazooz/rico' }],
-                [{ text: '🦙 Llama 3.2 3B', callback_data: 'model_meta-llama/Llama-3.2-3B-Instruct' }],
-                [{ text: 'Qwen 2.5 7B', callback_data: 'model_Qwen/Qwen2.5-7B-Instruct' }],
-                [{ text: 'Mistral 7B', callback_data: 'model_mistralai/Mistral-7B-Instruct-v0.3' }],
-                [{ text: '📋 كل النماذج (OpenRouter)', callback_data: 'list_all_models' }]
-            ]
-        };
-        telegramBot.sendMessage(chatId, '🔄 اختر النموذج:', { reply_markup: keyboard });
+        telegramBot.sendChatAction(chatId, 'typing');
+        try {
+            const models = await fetchOpenRouterModels();
+            const cheapest = models.slice(0, 8);
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '🤖 RICO (mohamedazooz/rico)', callback_data: 'model_mohamedazooz/rico' }],
+                    ...cheapest.map(m => {
+                        const price = m.pricing?.prompt ? `$${(parseFloat(m.pricing.prompt) * 1000).toFixed(4)}/1K` : 'Free';
+                        return [{ text: `${m.id.substring(0, 35)} (${price})`, callback_data: `model_${m.id}` }];
+                    }),
+                    [{ text: '📋 كل النماذج (OpenRouter)', callback_data: 'list_all_models' }]
+                ]
+            };
+            telegramBot.sendMessage(chatId, '🔄 اختر النموذج (الأرخص أولاً):', { reply_markup: keyboard });
+        } catch (e) {
+            telegramBot.sendMessage(chatId, `❌ خطأ: ${e.message}`);
+        }
     });
     
     telegramBot.onText(/\/models/, async (msg) => {
@@ -127,7 +135,10 @@ if (config.telegramToken) {
         try {
             const models = await fetchOpenRouterModels();
             const topModels = models.slice(0, 20);
-            const text = `📋 **أفضل 20 نموذج (OpenRouter):**\n\n${topModels.map((m, i) => `${i+1}. ${m.id}\n   💰 ${m.pricing?.prompt || 'N/A'} / 1K tokens`).join('\n\n')}\n\n**للمزيد:** /model لاختيار نموذج`;
+            const text = `📋 **أرخص 20 نموذج (OpenRouter):**\n\n${topModels.map((m, i) => {
+                const price = m.pricing?.prompt ? `$${(parseFloat(m.pricing.prompt) * 1000).toFixed(4)}/1K` : 'Free';
+                return `${i+1}. \`${m.id}\`\n   💰 ${price}`;
+            }).join('\n\n')}\n\n**للاختيار:** /model`;
             telegramBot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
         } catch (e) {
             telegramBot.sendMessage(chatId, `❌ خطأ: ${e.message}`);
@@ -243,9 +254,12 @@ if (config.telegramToken) {
             telegramBot.answerCallbackQuery(query.id);
             fetchOpenRouterModels().then(models => {
                 const keyboard = {
-                    inline_keyboard: models.slice(0, 15).map(m => [{ text: m.id.substring(0, 40), callback_data: `model_${m.id}` }])
+                    inline_keyboard: models.slice(0, 15).map(m => {
+                        const price = m.pricing?.prompt ? `$${(parseFloat(m.pricing.prompt) * 1000).toFixed(4)}/1K` : 'Free';
+                        return [{ text: `${m.id.substring(0, 30)} (${price})`, callback_data: `model_${m.id}` }];
+                    })
                 };
-                telegramBot.editMessageText('📋 **اختر نموذجاً:**', { chat_id: chatId, message_id: query.message.message_id, reply_markup: keyboard, parse_mode: 'Markdown' });
+                telegramBot.editMessageText('📋 **اختر نموذجاً (الأرخص أولاً):**', { chat_id: chatId, message_id: query.message.message_id, reply_markup: keyboard, parse_mode: 'Markdown' });
             });
         }
     });
@@ -293,7 +307,12 @@ async function fetchOpenRouterModels() {
             headers: { Authorization: `Bearer ${config.openrouterKey}` }
         });
         const data = await res.json();
-        state.openrouterModels = data.data || [];
+        // Sort by price (cheapest first)
+        state.openrouterModels = (data.data || []).sort((a, b) => {
+            const priceA = parseFloat(a.pricing?.prompt || '999');
+            const priceB = parseFloat(b.pricing?.prompt || '999');
+            return priceA - priceB;
+        });
         return state.openrouterModels;
     } catch (e) {
         console.error('Fetch models error:', e);
